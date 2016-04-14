@@ -10,19 +10,11 @@
 #include <opencv2/opencv.hpp> 
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
-
-
-//Should be set for each device and OS
-#define WINDOW 0
-#define TRAINING_DIR "/media/sda10/Study/Data/Human_pose_estimation/EVAL/indexed_ordered_by_diversity/"
-#define SAVE_DIR "/media/sda10/Study/Data/Human_pose_estimation/Result_EVAL/"
-
-#if WINDOW
-#include <Windows.h>
-#else
 #include <boost/filesystem.hpp>
-#endif
 
+
+#define TRAINING_DIR "/media/sda1/Study/Data/Human_pose_estimation/EVAL/indexed_ordered_by_diversity/"
+#define SAVE_DIR "/media/sda1/Study/Data/Human_pose_estimation/Result_EVAL/"
 
 
 #define Q_WIDTH 320
@@ -47,22 +39,22 @@
 #define K_MEANS_ATTEMPT 10
 #define K_MEANS_EPS 0.001
 
-#define NEAREST_NUM 1
-#define FEATURE_ITER 1024
-#define MIN_SAMPLE_NUM 8
+#define NEAREST_NUM 2
+#define FEATURE_ITER 1024  // 1024
+#define MIN_SAMPLE_NUM 124 //1024
 #define THR 0.1
 #define RANDOM_SAMPLE 1000
 #define NN_SEARCH_RADIUS 0.1f
 
 #define TREE_NUM 1
-#define BAGGING_RATIO 0.6
+#define BAGGING_RATIO 1
 
-#define TRAIN_FRAME_NUM 5520
-#define POINT_MATCHING_FRAME_NUM 1000//1000
-#define TEST_FRAME_NUM 2762 //2762	//model0 -> 2760, model1 -> 2762, model2 -> 2760
-#define TRAIN_MODEL_1 0
+#define TRAIN_FRAME_NUM 100
+#define POINT_MATCHING_FRAME_NUM 1000
+#define TEST_FRAME_NUM 2760	//model0 -> 2760, model1 -> 2762, model2 -> 2760
+#define TRAIN_MODEL_1 1
 #define TRAIN_MODEL_2 2
-#define TEST_MODEL 1
+#define TEST_MODEL 0
 
 
 #define HEAD 0
@@ -84,6 +76,8 @@
 //ABOVE IS FOR PP_JOINT(FOR ALL JOINT)
 //TRAIN EXCLUDE TRSO
 //WHEN CLUSTERING(FINAL RESULT) -> TRSO, BLLY, L_HIP, R_HIP IS EXCLUDED
+
+#define RIGID_MATCH_SIZE 15
 
 
 
@@ -266,6 +260,150 @@ bool point::split_left(point* joint_train, float delta[5], float search_radius_x
 	}
 }
 
+void	build_leaf(node* tree_ptr, int depth, int& node_number, point* point_train, int& leaf_number, int tree_number)
+{
+	
+	
+	//K-means clustering to offset
+	Mat k_sample(Size(NEAREST_NUM * COORDINATE_DIM, tree_ptr->sample.size()), CV_32FC1);
+	Mat best_label, center;
+	for (int sid = 0; sid < tree_ptr->sample.size(); sid++)
+	{
+			
+		for (int nid = 0; nid < NEAREST_NUM; nid++)
+		{
+			for (int cid = 0; cid < COORDINATE_DIM; cid++)
+				k_sample.at<float>(sid, nid * COORDINATE_DIM + cid) = tree_ptr->sample[sid]->offset[nid][cid];
+		}
+	}
+
+	kmeans(k_sample, K_MEANS_CLUSTER_NUM, best_label, TermCriteria(CV_TERMCRIT_EPS + CV_TERMCRIT_ITER, K_MEANS_ITER, K_MEANS_EPS), K_MEANS_ATTEMPT, KMEANS_PP_CENTERS, center);
+
+			
+
+	//figure2,3
+	if (leaf_number == 10000 || leaf_number == 110000 || leaf_number == 210000 || leaf_number == 310000 || leaf_number == 410000 || leaf_number == 510000 || leaf_number == 610000 || leaf_number == 710000 || leaf_number == 810000 || leaf_number == 910000)
+	{
+		ofstream of;
+		stringstream ss;
+		ss << SAVE_DIR << "figure_2_3/" << leaf_number << "_world.txt";
+		of.open(ss.str());
+		ss.str("");
+		ss.clear();
+
+		for (int i = 0; i < tree_ptr->sample.size(); i++)
+		{
+			ss << tree_ptr->sample[i]->x_world << " " << tree_ptr->sample[i]->y_world << " " << tree_ptr->sample[i]->depth << " ";
+			for (int oid = 0; oid < NEAREST_NUM; oid++)
+			{
+				for (int cid = 0; cid < COORDINATE_DIM; cid++)
+					ss << tree_ptr->sample[i]->offset[oid][cid] << " ";
+			}
+			ss << tree_ptr->sample[i]->frame_id;
+			ss << endl;
+			of << ss.str();
+			ss.str("");
+			ss.clear();
+		}
+		of.close();
+
+		ss << SAVE_DIR << "figure_2_3/" << leaf_number << "_cluster.txt";
+		of.open(ss.str());
+		ss.str("");
+		ss.clear();
+
+		for (int i = 0; i < center.rows; i++)
+		{
+			for (int j = 0; j < center.cols; j++)
+				of << center.at<float>(i, j) << " ";
+			of << endl;
+		}
+		of.close();
+
+
+
+		vector<int> checked_fid;
+		for (int sid = 0; sid < tree_ptr->sample.size(); sid++)
+		{
+			bool is_checked = false;
+			for (int j = 0; j < checked_fid.size(); j++)
+			{
+				if (checked_fid[j] == tree_ptr->sample[sid]->frame_id)
+					is_checked = true;
+			}
+
+			if (is_checked)
+				continue;
+
+			Mat display(Q_HEIGHT, Q_WIDTH, CV_8UC3);
+			float* display_tmp = new float[Q_HEIGHT * Q_WIDTH];
+
+			for (int i = 0; i < Q_HEIGHT * Q_WIDTH; i++)
+				display_tmp[i] = point_train[tree_ptr->sample[sid]->frame_id * Q_HEIGHT * Q_WIDTH + i].depth;
+
+			draw_depth_user(&display, display_tmp);
+
+			checked_fid.push_back(tree_ptr->sample[sid]->frame_id);
+			for (int ssid = 0; ssid < tree_ptr->sample.size(); ssid++)
+			{
+				if (tree_ptr->sample[sid]->frame_id == tree_ptr->sample[ssid]->frame_id)
+				{
+					float pt[3];
+					pt[0] = tree_ptr->sample[ssid]->x_world;
+					pt[1] = tree_ptr->sample[ssid]->y_world;
+					pt[2] = tree_ptr->sample[ssid]->depth;
+					world2pixel(pt);
+					rectangle(display, Rect(pt[0] - 2, pt[1] - 2, 4, 4), CV_RGB(0, 255, 0), 2);	//original
+
+					pt[0] = tree_ptr->sample[ssid]->x_world + k_sample.at<float>(ssid, 0);
+					pt[1] = tree_ptr->sample[ssid]->y_world + k_sample.at<float>(ssid, 1);
+					pt[2] = tree_ptr->sample[ssid]->depth + k_sample.at<float>(ssid, 2);
+					world2pixel(pt);
+					rectangle(display, Rect(pt[0] - 2, pt[1] - 2, 4, 4), CV_RGB(255, 0, 0), 2);	//off1
+
+					pt[0] = tree_ptr->sample[ssid]->x_world + k_sample.at<float>(ssid, 3);
+					pt[1] = tree_ptr->sample[ssid]->y_world + k_sample.at<float>(ssid, 4);
+					pt[2] = tree_ptr->sample[ssid]->depth + k_sample.at<float>(ssid, 5);
+					world2pixel(pt);
+					rectangle(display, Rect(pt[0] - 2, pt[1] - 2, 4, 4), CV_RGB(0, 0, 255), 2);	//off2
+
+				}
+
+
+			}
+
+			ss << SAVE_DIR << "figure_2_3/" << leaf_number << "_" << tree_ptr->sample[sid]->frame_id << ".jpg";
+			imwrite(ss.str(), display);
+			ss.str("");
+			ss.clear();
+			delete[] display_tmp;
+			display.release();
+		}
+	}
+	//figure_2_3
+
+	tree_ptr->clustered_offset.reserve(K_MEANS_CLUSTER_NUM);
+	for (int i = 0; i < K_MEANS_CLUSTER_NUM; i++)
+	{
+		cluster tmp;
+		tmp.priority = 0;
+		tmp.offset = new float*[NEAREST_NUM];
+		for (int nid = 0; nid < NEAREST_NUM; nid++)
+		{
+			tmp.offset[nid] = new float[COORDINATE_DIM];
+			for (int cid = 0; cid < COORDINATE_DIM; cid++)
+				tmp.offset[nid][cid] = center.at<float>(i, nid * COORDINATE_DIM + cid);
+		}
+		tree_ptr->clustered_offset.push_back(tmp);
+	}
+	for (int i = 0; i < best_label.rows; i++)
+		tree_ptr->clustered_offset[best_label.at<int>(i, 0)].priority++;
+	for (int i = 0; i < tree_ptr->clustered_offset.size(); i++)
+		tree_ptr->clustered_offset[i].priority /= (float)tree_ptr->sample.size();
+
+
+	sort(tree_ptr->clustered_offset.begin(), tree_ptr->clustered_offset.end());
+}
 void split_node(node* tree_ptr, int depth, int& node_number, point* point_train, int& leaf_number, int tree_number)
 {
 	cout << tree_number << "th tree " << node_number << "th node is in training... ";
@@ -275,148 +413,10 @@ void split_node(node* tree_ptr, int depth, int& node_number, point* point_train,
 	{
 		leaf_number++;
 		node_number++;
-		//K-means clustering to offset
-		Mat k_sample(Size(NEAREST_NUM * COORDINATE_DIM, tree_ptr->sample.size()), CV_32FC1);
-		Mat best_label, center;
-		for (int sid = 0; sid < tree_ptr->sample.size(); sid++)
-		{
-			
-			for (int nid = 0; nid < NEAREST_NUM; nid++)
-			{
-				for (int cid = 0; cid < COORDINATE_DIM; cid++)
-					k_sample.at<float>(sid, nid * COORDINATE_DIM + cid) = tree_ptr->sample[sid]->offset[nid][cid];
-			}
-		}
-
-		kmeans(k_sample, K_MEANS_CLUSTER_NUM, best_label, TermCriteria(CV_TERMCRIT_EPS + CV_TERMCRIT_ITER, K_MEANS_ITER, K_MEANS_EPS), K_MEANS_ATTEMPT, KMEANS_PP_CENTERS, center);
-
-		//figure2,3
-		if (leaf_number == 10000 || leaf_number == 110000 || leaf_number == 210000 || leaf_number == 310000 || leaf_number == 410000 || leaf_number == 510000 || leaf_number == 610000 || leaf_number == 710000 || leaf_number == 810000 || leaf_number == 910000)
-		{
-			ofstream of;
-			stringstream ss;
-			ss << SAVE_DIR << "figure_2_3/" << leaf_number << "_world.txt";
-			of.open(ss.str());
-			ss.str("");
-			ss.clear();
-
-			for (int i = 0; i < tree_ptr->sample.size(); i++)
-			{
-				ss << tree_ptr->sample[i]->x_world << " " << tree_ptr->sample[i]->y_world << " " << tree_ptr->sample[i]->depth << " ";
-				for (int oid = 0; oid < NEAREST_NUM; oid++)
-				{
-					for (int cid = 0; cid < COORDINATE_DIM; cid++)
-						ss << tree_ptr->sample[i]->offset[oid][cid] << " ";
-				}
-				ss << tree_ptr->sample[i]->frame_id;
-				ss << endl;
-				of << ss.str();
-				ss.str("");
-				ss.clear();
-			}
-			of.close();
-
-			ss << SAVE_DIR << "figure_2_3/" << leaf_number << "_cluster.txt";
-			of.open(ss.str());
-			ss.str("");
-			ss.clear();
-
-			for (int i = 0; i < center.rows; i++)
-			{
-				for (int j = 0; j < center.cols; j++)
-					of << center.at<float>(i, j) << " ";
-				of << endl;
-			}
-			of.close();
-
-
-
-			vector<int> checked_fid;
-			for (int sid = 0; sid < tree_ptr->sample.size(); sid++)
-			{
-				bool is_checked = false;
-				for (int j = 0; j < checked_fid.size(); j++)
-				{
-					if (checked_fid[j] == tree_ptr->sample[sid]->frame_id)
-						is_checked = true;
-				}
-
-				if (is_checked)
-					continue;
-
-				Mat display(Q_HEIGHT, Q_WIDTH, CV_8UC3);
-				float* display_tmp = new float[Q_HEIGHT * Q_WIDTH];
-
-				for (int i = 0; i < Q_HEIGHT * Q_WIDTH; i++)
-					display_tmp[i] = point_train[tree_ptr->sample[sid]->frame_id * Q_HEIGHT * Q_WIDTH + i].depth;
-
-				draw_depth_user(&display, display_tmp);
-
-				checked_fid.push_back(tree_ptr->sample[sid]->frame_id);
-				for (int ssid = 0; ssid < tree_ptr->sample.size(); ssid++)
-				{
-					if (tree_ptr->sample[sid]->frame_id == tree_ptr->sample[ssid]->frame_id)
-					{
-						float pt[3];
-						pt[0] = tree_ptr->sample[ssid]->x_world;
-						pt[1] = tree_ptr->sample[ssid]->y_world;
-						pt[2] = tree_ptr->sample[ssid]->depth;
-						world2pixel(pt);
-						rectangle(display, Rect(pt[0] - 2, pt[1] - 2, 4, 4), CV_RGB(0, 255, 0), 2);	//original
-
-						pt[0] = tree_ptr->sample[ssid]->x_world + k_sample.at<float>(ssid, 0);
-						pt[1] = tree_ptr->sample[ssid]->y_world + k_sample.at<float>(ssid, 1);
-						pt[2] = tree_ptr->sample[ssid]->depth + k_sample.at<float>(ssid, 2);
-						world2pixel(pt);
-						rectangle(display, Rect(pt[0] - 2, pt[1] - 2, 4, 4), CV_RGB(255, 0, 0), 2);	//off1
-
-						pt[0] = tree_ptr->sample[ssid]->x_world + k_sample.at<float>(ssid, 3);
-						pt[1] = tree_ptr->sample[ssid]->y_world + k_sample.at<float>(ssid, 4);
-						pt[2] = tree_ptr->sample[ssid]->depth + k_sample.at<float>(ssid, 5);
-						world2pixel(pt);
-						rectangle(display, Rect(pt[0] - 2, pt[1] - 2, 4, 4), CV_RGB(0, 0, 255), 2);	//off2
-
-					}
-
-
-				}
-
-				ss << SAVE_DIR << "figure_2_3/" << leaf_number << "_" << tree_ptr->sample[sid]->frame_id << ".jpg";
-				imwrite(ss.str(), display);
-				ss.str("");
-				ss.clear();
-				delete[] display_tmp;
-				display.release();
-			}
-		}
-		//figure_2_3
-
-		tree_ptr->clustered_offset.reserve(K_MEANS_CLUSTER_NUM);
-		for (int i = 0; i < K_MEANS_CLUSTER_NUM; i++)
-		{
-			cluster tmp;
-			tmp.priority = 0;
-			tmp.offset = new float*[NEAREST_NUM];
-			for (int nid = 0; nid < NEAREST_NUM; nid++)
-			{
-				tmp.offset[nid] = new float[COORDINATE_DIM];
-				for (int cid = 0; cid < COORDINATE_DIM; cid++)
-					tmp.offset[nid][cid] = center.at<float>(i, nid * COORDINATE_DIM + cid);
-			}
-			tree_ptr->clustered_offset.push_back(tmp);
-		}
-		for (int i = 0; i < best_label.rows; i++)
-			tree_ptr->clustered_offset[best_label.at<int>(i, 0)].priority++;
-		for (int i = 0; i < tree_ptr->clustered_offset.size(); i++)
-			tree_ptr->clustered_offset[i].priority /= (float)tree_ptr->sample.size();
-
-
-		sort(tree_ptr->clustered_offset.begin(), tree_ptr->clustered_offset.end());
-
+		build_leaf( tree_ptr, depth, node_number, point_train, leaf_number, tree_number );
 		return;
 	}
-
-	else
+	else // split nodes
 	{
 		node_number++;
 		tree_ptr->depth = depth;
@@ -579,7 +579,7 @@ void split_node(node* tree_ptr, int depth, int& node_number, point* point_train,
 				tree_ptr->right_child->sample.push_back(tree_ptr->sample[sid]);
 		}
 
-
+		//// why is this code needed?
 		if (tree_ptr->left_child->sample.size() < MIN_SAMPLE_NUM || tree_ptr->right_child->sample.size() < MIN_SAMPLE_NUM)
 		{
 			delete tree_ptr->left_child;
@@ -588,157 +588,95 @@ void split_node(node* tree_ptr, int depth, int& node_number, point* point_train,
 			tree_ptr->right_child = NULL;
 			leaf_number++;
 
-
-			//K-means clustering to offset
-			Mat k_sample(Size(NEAREST_NUM * COORDINATE_DIM, tree_ptr->sample.size()), CV_32FC1);
-			Mat best_label, center;
-			for (int sid = 0; sid < tree_ptr->sample.size(); sid++)
-			{
-
-				for (int nid = 0; nid < NEAREST_NUM; nid++)
-				{
-					for (int cid = 0; cid < COORDINATE_DIM; cid++)
-						k_sample.at<float>(sid, nid * COORDINATE_DIM + cid) = tree_ptr->sample[sid]->offset[nid][cid];
-				}
-			}
-
-			kmeans(k_sample, K_MEANS_CLUSTER_NUM, best_label, TermCriteria(CV_TERMCRIT_EPS + CV_TERMCRIT_ITER, K_MEANS_ITER, K_MEANS_EPS), K_MEANS_ATTEMPT, KMEANS_PP_CENTERS, center);
-
-			//figure_2_3
-			if (leaf_number == 10000 || leaf_number == 110000 || leaf_number == 210000 || leaf_number == 310000 || leaf_number == 410000 || leaf_number == 510000 || leaf_number == 610000 || leaf_number == 710000 || leaf_number == 810000 || leaf_number == 910000)
-			{
-				ofstream of;
-				stringstream ss;
-				ss << SAVE_DIR << "figure_2_3/" << leaf_number << "_world.txt";
-				of.open(ss.str());
-				ss.str("");
-				ss.clear();
-
-				for (int i = 0; i < tree_ptr->sample.size(); i++)
-				{
-					ss << tree_ptr->sample[i]->x_world << " " << tree_ptr->sample[i]->y_world << " " << tree_ptr->sample[i]->depth << " ";
-					for (int oid = 0; oid < NEAREST_NUM; oid++)
-					{
-						for (int cid = 0; cid < COORDINATE_DIM; cid++)
-							ss << tree_ptr->sample[i]->offset[oid][cid] << " ";
-					}
-					ss << tree_ptr->sample[i]->frame_id;
-					ss << endl;
-					of << ss.str();
-					ss.str("");
-					ss.clear();
-				}
-				of.close();
-
-				ss << SAVE_DIR << "figure_2_3/" << leaf_number << "_cluster.txt";
-				of.open(ss.str());
-				ss.str("");
-				ss.clear();
-
-				for (int i = 0; i < center.rows; i++)
-				{
-					for (int j = 0; j < center.cols; j++)
-						of << center.at<float>(i, j) << " ";
-					of << endl;
-				}
-				of.close();
-
-
-
-				vector<int> checked_fid;
-				for (int sid = 0; sid < tree_ptr->sample.size(); sid++)
-				{
-					bool is_checked = false;
-					for (int j = 0; j < checked_fid.size(); j++)
-					{
-						if (checked_fid[j] == tree_ptr->sample[sid]->frame_id)
-							is_checked = true;
-					}
-
-					if (is_checked)
-						continue;
-
-					Mat display(Q_HEIGHT, Q_WIDTH, CV_8UC3);
-					float* display_tmp = new float[Q_HEIGHT * Q_WIDTH];
-
-					for (int i = 0; i < Q_HEIGHT * Q_WIDTH; i++)
-						display_tmp[i] = point_train[tree_ptr->sample[sid]->frame_id * Q_HEIGHT * Q_WIDTH + i].depth;
-
-					draw_depth_user(&display, display_tmp);
-
-					checked_fid.push_back(tree_ptr->sample[sid]->frame_id);
-					for (int ssid = 0; ssid < tree_ptr->sample.size(); ssid++)
-					{
-						if (tree_ptr->sample[sid]->frame_id == tree_ptr->sample[ssid]->frame_id)
-						{
-							float pt[3];
-							pt[0] = tree_ptr->sample[ssid]->x_world;
-							pt[1] = tree_ptr->sample[ssid]->y_world;
-							pt[2] = tree_ptr->sample[ssid]->depth;
-							world2pixel(pt);
-							rectangle(display, Rect(pt[0] - 2, pt[1] - 2, 4, 4), CV_RGB(0, 255, 0), 2);	//original
-
-							pt[0] = tree_ptr->sample[ssid]->x_world + k_sample.at<float>(ssid, 0);
-							pt[1] = tree_ptr->sample[ssid]->y_world + k_sample.at<float>(ssid, 1);
-							pt[2] = tree_ptr->sample[ssid]->depth + k_sample.at<float>(ssid, 2);
-							world2pixel(pt);
-							rectangle(display, Rect(pt[0] - 2, pt[1] - 2, 4, 4), CV_RGB(255, 0, 0), 2);	//off1
-
-							pt[0] = tree_ptr->sample[ssid]->x_world + k_sample.at<float>(ssid, 3);
-							pt[1] = tree_ptr->sample[ssid]->y_world + k_sample.at<float>(ssid, 4);
-							pt[2] = tree_ptr->sample[ssid]->depth + k_sample.at<float>(ssid, 5);
-							world2pixel(pt);
-							rectangle(display, Rect(pt[0] - 2, pt[1] - 2, 4, 4), CV_RGB(0, 0, 255), 2);	//off2
-
-						}
-
-
-					}
-
-					ss << SAVE_DIR << "figure_2_3/" << leaf_number << "_" << tree_ptr->sample[sid]->frame_id << ".jpg";
-					imwrite(ss.str(), display);
-					ss.str("");
-					ss.clear();
-					delete[] display_tmp;
-					display.release();
-				}
-			}
-			//figure_2_3
-
-
-			tree_ptr->clustered_offset.reserve(K_MEANS_CLUSTER_NUM);
-			for (int i = 0; i < K_MEANS_CLUSTER_NUM; i++)
-			{
-				cluster tmp;
-				tmp.priority = 0;
-				tmp.offset = new float*[NEAREST_NUM];
-				for (int nid = 0; nid < NEAREST_NUM; nid++)
-				{
-					tmp.offset[nid] = new float[COORDINATE_DIM];
-					for (int cid = 0; cid < COORDINATE_DIM; cid++)
-						tmp.offset[nid][cid] = center.at<float>(i, nid * COORDINATE_DIM + cid);
-				}
-				tree_ptr->clustered_offset.push_back(tmp);
-			}
-			for (int i = 0; i < best_label.rows; i++)
-				tree_ptr->clustered_offset[best_label.at<int>(i, 0)].priority++;
-			for (int i = 0; i < tree_ptr->clustered_offset.size(); i++)
-				tree_ptr->clustered_offset[i].priority /= (float)tree_ptr->sample.size();
-
-
-			sort(tree_ptr->clustered_offset.begin(), tree_ptr->clustered_offset.end());
-
+			build_leaf( tree_ptr, depth, node_number, point_train, leaf_number, tree_number );
 			return;
 		}
 
 
 		split_node(tree_ptr->left_child, depth + 1, node_number, point_train, leaf_number, tree_number);
 		split_node(tree_ptr->right_child, depth + 1, node_number, point_train, leaf_number, tree_number);
-
 	}
 }
 
-void tree_train(point* point_train, joint** joint_train, vector<node*>& tree_head)
+cv::Mat rigid_transform( cv::Mat X, cv::Mat Y ){ // Ho Yub Jung
+	cv::Mat tX;
+	int match_size = int( X.size().width);
+
+	cv::Mat mx, my;
+	reduce(X,mx, 1, CV_REDUCE_AVG, CV_32FC1);
+	reduce(Y,my, 1, CV_REDUCE_AVG, CV_32FC1);
+	//std::cout << "mx = " << std::endl << " " << mx << std::endl << std::endl;
+	//std::cout << "my = " << std::endl << " " << my << std::endl << std::endl;
+
+	cv::Mat Xc(3,RIGID_MATCH_SIZE, CV_32FC1 );
+	cv::Mat Yc(3,RIGID_MATCH_SIZE, CV_32FC1 );
+	for( int r = 0 ; r < 3 ; r++ ){
+		for( int c = 0 ; c < match_size; c++ ){
+			Xc.at<float>(r,c) = X.at<float>(r,c) - mx.at<float>(r);
+			Yc.at<float>(r,c) = Y.at<float>(r,c) - my.at<float>(r);
+		}
+	}
+	//std::cout << "Xc = " << std::endl << " " << Xc << std::endl << std::endl;
+	//std::cout << "Yc = " << std::endl << " " << Yc << std::endl << std::endl;
+	
+	cv::Mat Mtemp;
+	cv::Mat sx,sy; 
+	cv::reduce(Xc.mul(Xc), Mtemp, 0, CV_REDUCE_SUM, CV_32FC1);
+	cv::reduce(Mtemp,sx, 1, CV_REDUCE_AVG, CV_32FC1 );
+	cv::reduce(Yc.mul(Yc), Mtemp, 0, CV_REDUCE_SUM, CV_32FC1);
+	cv::reduce(Mtemp,sy, 1, CV_REDUCE_AVG, CV_32FC1);
+	//std::cout << "sx = " << std::endl << " " << sx << std::endl << std::endl;
+	//std::cout << "sy = " << std::endl << " " << sy << std::endl << std::endl;
+
+	cv::Mat Sxy;
+	cv::transpose(Xc, Mtemp);
+	Sxy = (Yc*Mtemp)*(1/float(match_size));
+	//std::cout << "Sxy = " << std::endl << " " << Sxy << std::endl << std::endl;
+	//std::cout << "Mtemp = " << std::endl << " " << Mtemp << std::endl << std::endl;
+
+	cv::Mat D, U, V;
+	cv::SVD::compute(Sxy, D, U, V);
+	//std::cout << "D = " << std::endl << " " << D << std::endl << std::endl;
+	//std::cout << "U = " << std::endl << " " << U << std::endl << std::endl;
+	//std::cout << "V = " << std::endl << " " << V << std::endl << std::endl;
+	
+	cv::Mat R;
+	cv::Mat S = cv::Mat::eye(3, 3, CV_32FC1);
+	//S.at<double>(2,2) = -1; // we assume no reflection
+	//std::cout << "S = " << std::endl << " " << S << std::endl << std::endl;
+	
+	
+	cv::transpose( V, Mtemp );
+	R = V*S*Mtemp;
+	//std::cout << "R = " << std::endl << " " << R << std::endl << std::endl;
+	//std::cout << "Mtemp = " << std::endl << " " << Mtemp << std::endl << std::endl;
+
+	 
+	////  need for scale and translation values
+	float c;
+	cv::Mat Dm = cv::Mat::eye(3, 3, CV_32FC1);
+	Dm.at<float>(0,0) = D.at<float>(0);
+	Dm.at<float>(1,1) = D.at<float>(1);
+	Dm.at<float>(2,2) = D.at<float>(2);
+	c = (trace(Dm*S) / sx.at<float>(0)).val[0];
+	//std::cout << "c = " << std::endl << " " << c << std::endl << std::endl;
+
+	cv::Mat t;
+	t = my - c*R*mx;
+	//std::cout << "t = " << std::endl << " " << t << std::endl << std::endl;
+
+	//std::cout << "R*X = " << std::endl << " " << (R*X) << std::endl << std::endl;
+	//std::cout << "R*Y = " << std::endl << " " << (R*Y) << std::endl << std::endl;
+
+	tX = R*X*c;
+	for( int r = 0 ; r < 3 ; r++ ){
+		for( int c = 0 ; c < match_size; c++ ){
+			tX.at<float>(r,c) += t.at<float>(r);
+		}
+	}
+	return tX;
+}
+void tree_train(point* point_train, joint** joint_train, vector<node*>& tree_head) 
 {
 	node* tree_ptr;
 	
@@ -758,7 +696,7 @@ void tree_train(point* point_train, joint** joint_train, vector<node*>& tree_hea
 	{
 		tree_ptr = new node();
 
-		if (TREE_NUM == 1)
+		if (TREE_NUM == 1) // No bagging use all samples
 		{
 			for (int i = 0; i < TRAIN_FRAME_NUM * Q_HEIGHT * Q_WIDTH; i++)
 			{
@@ -766,7 +704,7 @@ void tree_train(point* point_train, joint** joint_train, vector<node*>& tree_hea
 					tree_ptr->sample.push_back(point_train + i);
 			}
 		}
-		else
+		else // Bagging technique
 		{
 			vector<int> sampled_fid;
 			int sampled_frame = 0;
@@ -798,7 +736,7 @@ void tree_train(point* point_train, joint** joint_train, vector<node*>& tree_hea
 				if (sampled_frame == BAGGING_RATIO * TRAIN_FRAME_NUM)
 					break;
 			}
-		}
+		}////////////////////////////////////
 
 		int node_number = 0;
 		int leaf_number = 0;
@@ -1047,9 +985,18 @@ void tree_traversal(point* point_test, joint** joint_test, float** center_train,
 			cluster_end = clock();
 			time_result << "CLUSTERING: " << (double)(cluster_end - cluster_begin) / CLOCKS_PER_SEC << " ";
 
-			//labeling using point matching
+
+			
+			/////// Ho Yub Jung     labeling using point matching
 			clock_t label_begin, label_end;
 			label_begin = clock();
+			float offset_clusters[CLUSTER_JOINT_NUMBER][3];
+			for( int j = 0 ; j < CLUSTER_JOINT_NUMBER ; j++ ){
+				offset_clusters[j][0] = clustered_points[j][0] - center_pt[0];
+				offset_clusters[j][1] = clustered_points[j][1] - center_pt[1];
+				offset_clusters[j][2] = clustered_points[j][2] - center_pt[2];
+			}
+
 			float min_dist_sum = 9999;
 			vector<int> save_cluster_id;
 			for (int train_f = 0; train_f < POINT_MATCHING_FRAME_NUM; train_f++)
@@ -1059,12 +1006,59 @@ void tree_traversal(point* point_test, joint** joint_test, float** center_train,
 				template_center[1] = center_train[train_f][1];
 				template_center[2] = center_train[train_f][2];
 
-				float align[3];
+				//float align[3];
+				//align[0] = center_pt[0] - template_center[0];
+				//align[1] = center_pt[1] - template_center[1];
+				//align[2] = center_pt[2] - template_center[2];
 
-				align[0] = center_pt[0] - template_center[0];
-				align[1] = center_pt[1] - template_center[1];
-				align[2] = center_pt[2] - template_center[2];
+				
+				float offset_template[JOINT_NUMBER][3];
+				for( int j = 0 ; j < JOINT_NUMBER ; j++ ){
+					offset_template[j][0] = joint_train[train_f][j].x_world - template_center[0];
+					offset_template[j][1] = joint_train[train_f][j].y_world - template_center[1];
+					offset_template[j][2] = joint_train[train_f][j].depth   - template_center[2];
+				}
+				
+				
+				///// Ho Yub Jung           ////////////////////////////////////////////////Get initial matchings
+				cv::Mat eX(3,RIGID_MATCH_SIZE, CV_32FC1 );
+				cv::Mat cY(3,RIGID_MATCH_SIZE, CV_32FC1 );
+				int joint2rigid_idx[JOINT_NUMBER];
+				int rigid2cluster_idx[RIGID_MATCH_SIZE];
+				joint2rigid_idx[TRSO] = -1;
+				int ridx = 0;
+				for (int jid = 0; jid < JOINT_NUMBER; jid++)
+				{
+					if( jid != TRSO  ){
+						float min_dist = 9999;
+						int save_cid;
+						for (int cid = 0; cid < CLUSTER_JOINT_NUMBER; cid++)
+						{
+							float dist = 0;
+							dist += (offset_template[jid][0] - offset_clusters[cid][0])*(offset_template[jid][0] - offset_clusters[cid][0]); 
+							dist += (offset_template[jid][1] - offset_clusters[cid][1])*(offset_template[jid][1] - offset_clusters[cid][1]); 
+							dist += (offset_template[jid][2] - offset_clusters[cid][2])*(offset_template[jid][2] - offset_clusters[cid][2]); 
+							if (min_dist > dist)
+							{
+								min_dist = dist;
+								save_cid = cid;
+							}
+						}
+						eX.at<float>(0,ridx) = offset_template[     jid][0];
+						eX.at<float>(1,ridx) = offset_template[     jid][1];
+						eX.at<float>(2,ridx) = offset_template[     jid][2];
+						cY.at<float>(0,ridx) = offset_clusters[save_cid][0];
+						cY.at<float>(1,ridx) = offset_clusters[save_cid][1];
+						cY.at<float>(2,ridx) = offset_clusters[save_cid][2];
+						joint2rigid_idx[jid] = ridx;
+						rigid2cluster_idx[ridx] = save_cid;
+						ridx++;
+					}
+				}
+				cv::Mat tX; // transformed eX to fit with cY
+				tX =  rigid_transform( eX, cY );
 
+				///// Ho Yub Jung ///// find matching from transformed templates
 				float dist_sum = 0;
 				vector<int> save_cid_tmp;
 				for (int jid = 0; jid < JOINT_NUMBER; jid++)
@@ -1074,17 +1068,25 @@ void tree_traversal(point* point_test, joint** joint_test, float** center_train,
 						continue;
 
 					float min_dist = 9999;
-					int save_cid;
-					for (int cid = 0; cid < CLUSTER_JOINT_NUMBER; cid++)
+					int jridx = joint2rigid_idx[jid];
+					int save_rid;
+					for (int crid = 0; crid < RIGID_MATCH_SIZE; crid++)
 					{
-						float dist = sqrt(pow(joint_train[train_f][jid].x_world - (clustered_points[cid][0] - align[0]), 2) + pow(joint_train[train_f][jid].y_world - (clustered_points[cid][1] - align[1]), 2) + pow(joint_train[train_f][jid].depth - (clustered_points[cid][2] - align[2]), 2));
-
+						float dist = 0;
+						dist += (cY.at<float>(0,crid) - tX.at<float>(0,jridx))*(cY.at<float>(0,crid) - tX.at<float>(0,jridx)); 
+						dist += (cY.at<float>(1,crid) - tX.at<float>(1,jridx))*(cY.at<float>(1,crid) - tX.at<float>(1,jridx)); 
+						dist += (cY.at<float>(2,crid) - tX.at<float>(2,jridx))*(cY.at<float>(2,crid) - tX.at<float>(2,jridx)); 
+						//dist += (cY.at<float>(0,crid) - eX.at<float>(0,jridx))*(cY.at<float>(0,crid) - eX.at<float>(0,jridx)); 
+						//dist += (cY.at<float>(1,crid) - eX.at<float>(1,jridx))*(cY.at<float>(1,crid) - eX.at<float>(1,jridx)); 
+						//dist += (cY.at<float>(2,crid) - eX.at<float>(2,jridx))*(cY.at<float>(2,crid) - eX.at<float>(2,jridx)); 
 						if (min_dist > dist)
 						{
 							min_dist = dist;
-							save_cid = cid;
+							save_rid = crid;
 						}
 					}
+					int save_cid;
+					save_cid = rigid2cluster_idx[save_rid];
 
 					save_cid_tmp.push_back(save_cid);
 					dist_sum += min_dist;
@@ -1095,6 +1097,42 @@ void tree_traversal(point* point_test, joint** joint_test, float** center_train,
 					min_dist_sum = dist_sum;
 					save_cluster_id = save_cid_tmp;
 				}
+
+
+				//float dist_sum = 0;
+				//vector<int> save_cid_tmp;
+				//for (int jid = 0; jid < JOINT_NUMBER; jid++)
+				//{
+
+				//	if (jid == TRSO)
+				//		continue;
+
+				//	float min_dist = 9999;
+				//	int save_cid;
+				//	for (int cid = 0; cid < CLUSTER_JOINT_NUMBER; cid++)
+				//	{
+				//		//float dist = sqrt(pow(joint_train[train_f][jid].x_world - (clustered_points[cid][0] - align[0]), 2) + pow(joint_train[train_f][jid].y_world - (clustered_points[cid][1] - align[1]), 2) + pow(joint_train[train_f][jid].depth - (clustered_points[cid][2] - align[2]), 2));
+				//		float dist = 0;
+				//		dist += (offset_template[jid][0] - offset_clusters[cid][0])*(offset_template[jid][0] - offset_clusters[cid][0]); 
+				//		dist += (offset_template[jid][1] - offset_clusters[cid][1])*(offset_template[jid][1] - offset_clusters[cid][1]); 
+				//		dist += (offset_template[jid][2] - offset_clusters[cid][2])*(offset_template[jid][2] - offset_clusters[cid][2]); 
+				//		if (min_dist > dist)
+				//		{
+				//			min_dist = dist;
+				//			save_cid = cid;
+				//		}
+				//	}
+
+				//	save_cid_tmp.push_back(save_cid);
+				//	dist_sum += min_dist;
+				//}
+				//if (min_dist_sum > dist_sum)
+				//{
+				//	min_dist_sum = dist_sum;
+				//	save_cluster_id = save_cid_tmp;
+				//}
+
+
 			}
 			label_end = clock();
 			time_result << "LABELING: " << (double)(label_end - label_begin) / CLOCKS_PER_SEC << " ";
@@ -1107,6 +1145,7 @@ void tree_traversal(point* point_test, joint** joint_test, float** center_train,
 			//draw_3d.open(ss.str());
 			//ss.str("");
 			//ss.clear();
+
 			//for (int i = 0; i < Q_HEIGHT * Q_WIDTH; i++)
 			//{
 			//	if (point_test[f * Q_HEIGHT * Q_WIDTH + i].depth != BACKGROUND_DEPTH)
@@ -1119,39 +1158,42 @@ void tree_traversal(point* point_test, joint** joint_test, float** center_train,
 			//}
 			//draw_3d.close();
 
-			ss << SAVE_DIR << f << "_estimated.txt";
-			draw_3d.open(ss.str());
-			ss.str("");
-			ss.clear();
-			for (int cid = 0; cid < clustered_points.size(); cid++)
-			{
-				ss << clustered_points[cid][0] << " " << clustered_points[cid][1] << " " << clustered_points[cid][2] << endl;
-				draw_3d << ss.str();
-				ss.str("");
-				ss.clear();
-			}
-			draw_3d.close();
-
-
-			//ss << SAVE_DIR << f << "_sample.txt";
+			//ss << SAVE_DIR << f << "_estimated.txt";
 			//draw_3d.open(ss.str());
 			//ss.str("");
 			//ss.clear();
-			//for (int sid = 0; sid < sample.rows; sid++)
+
+			//for (int cid = 0; cid < clustered_points.size(); cid++)
 			//{
-			//	ss << sample.at<float>(sid, 0) << " " << sample.at<float>(sid, 1) << " " << sample.at<float>(sid, 2) << endl;
+			//	ss << clustered_points[cid][0] << " " << clustered_points[cid][1] << " " << clustered_points[cid][2] << endl;
 			//	draw_3d << ss.str();
 			//	ss.str("");
 			//	ss.clear();
 			//}
 			//draw_3d.close();
+            
+            /*
+			ss << SAVE_DIR << f << "_sample.txt";
+			draw_3d.open(ss.str());
+			ss.str("");
+			ss.clear();
 
+			for (int sid = 0; sid < sample.rows; sid++)
+			{
+				ss << sample.at<float>(sid, 0) << " " << sample.at<float>(sid, 1) << " " << sample.at<float>(sid, 2) << endl;
+				draw_3d << ss.str();
+				ss.str("");
+				ss.clear();
+			}
+			draw_3d.close();
+            */
 
 
 			//ss << SAVE_DIR << f << "_gt.txt";
 			//draw_3d.open(ss.str());
 			//ss.str("");
 			//ss.clear();
+
 			//for (int joint_index = 0; joint_index < JOINT_NUMBER; joint_index++)
 			//{
 			//	if (joint_index != TRSO)
@@ -1174,7 +1216,7 @@ void tree_traversal(point* point_test, joint** joint_test, float** center_train,
 				int cid;
 				int r, g, b;
 
-				if (jid == TRSO || jid == BLLY || jid == L_HIPS || jid == R_HIPS)
+				if (jid == TRSO)
 					continue;
 
 				if (jid == HEAD)
@@ -1488,6 +1530,7 @@ void tree_traversal(point* point_test, joint** joint_test, float** center_train,
 	
 }
 
+
 void save_tree_recursion(node* tree, ofstream& of)
 {
 	stringstream ss;
@@ -1525,7 +1568,7 @@ void save_tree(vector<node*> tree_head)
 
 	ss << SAVE_DIR << "tree_save";
 #if WINDOW
-	CreateDirectory(ss.str().c_str(), NULL);
+	//CreateDirectory(ss.str().c_str(), NULL);
 #else
 	boost::filesystem::path dir(ss.str().c_str());
 	boost::filesystem::create_directory(dir);

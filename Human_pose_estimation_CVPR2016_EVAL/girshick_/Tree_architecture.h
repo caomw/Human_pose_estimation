@@ -14,8 +14,8 @@
 
 //Should be set for each device and OS
 #define WINDOW 0
-#define TRAINING_DIR "/media/sda10/Study/Data/Human_pose_estimation/EVAL/indexed_ordered_by_diversity/"
-#define SAVE_DIR "/media/sda10/Study/Data/Human_pose_estimation/Result_EVAL/"
+#define TRAINING_DIR "/media/sda1/Study/Data/Human_pose_estimation/EVAL/indexed_ordered_by_diversity/"
+#define SAVE_DIR "/media/sda1/Study/Data/Human_pose_estimation/Result_EVAL/"
 
 
 #if WINDOW
@@ -48,9 +48,9 @@
 #define K_MEANS_ATTEMPT 10
 #define K_MEANS_EPS 0.001
 
-#define NEAREST_NUM 2
+#define NEAREST_NUM 2 //6
 #define FEATURE_ITER 1024  // 1024
-#define MIN_SAMPLE_NUM 8 //1024
+#define MIN_SAMPLE_NUM 1024 //1024
 #define THR 0.1
 #define RANDOM_SAMPLE 1000
 #define NN_SEARCH_RADIUS 0.1f
@@ -58,7 +58,7 @@
 #define TREE_NUM 1
 #define BAGGING_RATIO 1
 
-#define TRAIN_FRAME_NUM 5522
+#define TRAIN_FRAME_NUM 1000
 #define POINT_MATCHING_FRAME_NUM 1000
 #define TEST_FRAME_NUM 2760	//model0 -> 2760, model1 -> 2762, model2 -> 2760
 #define TRAIN_MODEL_1 1
@@ -834,7 +834,7 @@ void tree_traversal(point* point_test, joint** joint_test, float** center_train,
 						average_offset[cid] = 0;
 				}
 				
-
+                int effective_tn = 0;
 				for (int tid = 0; tid < test_tree_number; tid++)
 				{
 
@@ -880,36 +880,41 @@ void tree_traversal(point* point_test, joint** joint_test, float** center_train,
 					}
 
 					
+				    if(sqrt(pow(estimated_offset[0],2) + pow(estimated_offset[1],2) + pow(estimated_offset[2],2)) < 0.1)
+                    {
+                        effective_tn++;
+                    	average_offset[0] += point_test[f * Q_HEIGHT * Q_WIDTH + i].x_world + estimated_offset[0];
+					    average_offset[1] += point_test[f * Q_HEIGHT * Q_WIDTH + i].y_world + estimated_offset[1];
+					    average_offset[2] += point_test[f * Q_HEIGHT * Q_WIDTH + i].depth   + estimated_offset[2];
+                    }
 					
-					average_offset[0] += point_test[f * Q_HEIGHT * Q_WIDTH + i].x_world + estimated_offset[0];
-					average_offset[1] += point_test[f * Q_HEIGHT * Q_WIDTH + i].y_world + estimated_offset[1];
-					average_offset[2] += point_test[f * Q_HEIGHT * Q_WIDTH + i].depth   + estimated_offset[2];
-
-					//for (int nid = 0; nid < NEAREST_NUM; nid++)
+                    //for (int nid = 0; nid < NEAREST_NUM; nid++)
 					//	delete[] estimated_offset[nid];
 					//delete[] estimated_offset;
 					
 				}
+    
+                if (effective_tn > 0)
+                {
+                	average_offset[0] /= (float)effective_tn;
+				    average_offset[1] /= (float)effective_tn;
+				    average_offset[2] /= (float)effective_tn;
+                    
+                    Mat estimated_sample(Size(COORDINATE_DIM, 1), CV_32FC1);
 
-				average_offset[0] /= (float)test_tree_number;
-				average_offset[1] /= (float)test_tree_number;
-				average_offset[2] /= (float)test_tree_number;
-				
+                    estimated_sample.at<float>(0, 0) = average_offset[0];
+                    estimated_sample.at<float>(0, 1) = average_offset[1];
+                    estimated_sample.at<float>(0, 2) = average_offset[2];
 
-				
-				Mat estimated_sample(Size(COORDINATE_DIM, 1), CV_32FC1);
+                    sample.push_back(estimated_sample.clone());
+            
 
-				estimated_sample.at<float>(0, 0) = average_offset[0];
-				estimated_sample.at<float>(0, 1) = average_offset[1];
-				estimated_sample.at<float>(0, 2) = average_offset[2];
-
-				sample.push_back(estimated_sample.clone());
-		
-
-				//for (int nid = 0; nid < NEAREST_NUM; nid++)
-				//	delete[] average_offset[nid];
-				//delete[] average_offset;
-				
+                    //for (int nid = 0; nid < NEAREST_NUM; nid++)
+                    //	delete[] average_offset[nid];
+                    //delete[] average_offset;
+                    //
+                }
+						
 			}
 			vote_end = clock();
 			time_result << "VOTING: " << (double)(vote_end - vote_begin) / CLOCKS_PER_SEC << " ";

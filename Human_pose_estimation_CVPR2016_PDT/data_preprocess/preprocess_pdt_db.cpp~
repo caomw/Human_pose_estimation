@@ -9,8 +9,8 @@
 #include <stdlib.h>
 
 
-#define PDT_FOLDER		"/media/sda10/Study/Data/Human_pose_estimation/PDT/F1D1"
-#define SAVE_FOLDER		"/media/sda10/Study/Data/Human_pose_estimation/PDT/time_sequence/"
+#define PDT_FOLDER		"/media/sda1/Study/Data/Human_pose_estimation/PDT/"
+#define SAVE_FOLDER		"/media/sda1/Study/Data/Human_pose_estimation/PDT/PDT2EVAL/time_sequence/"
 
 #define Q_WIDTH					320
 #define Q_HEIGHT				240
@@ -98,7 +98,7 @@ bool load2image( cv::Mat *image, char *path, float extm[4][4]){
 	in.close();
 	return load_successful;
 }
-bool load2depth( float depth[Q_WIDTH*Q_HEIGHT], float user[Q_WIDTH*Q_HEIGHT], char *path, float extm[4][4]){
+bool load2depth( float depth[Q_WIDTH*Q_HEIGHT], float user[Q_WIDTH*Q_HEIGHT], float body_center[3], char *path, float extm[4][4]){
 	bool load_successful = false;
 	std::ifstream in( path);
 	int px, py;
@@ -137,6 +137,27 @@ bool load2depth( float depth[Q_WIDTH*Q_HEIGHT], float user[Q_WIDTH*Q_HEIGHT], ch
 			depth[p] = BACKGROUND_DEPTH;
 		}
 	}
+	float body_count = 0;
+	body_center[0] = 0;
+	body_center[1] = 0;
+	body_center[2] = 0;
+	for( int y = 0 ; y < Q_HEIGHT ; y++ ){
+		for( int x = 0 ; x < Q_WIDTH ; x++ ){
+			int p = y*Q_WIDTH + x;
+			if( user[p] == 1 ){
+				body_center[0] += x;
+				body_center[1] += y;
+				body_center[2] += depth[p];
+				body_count++;
+			}
+		}
+	}
+	body_center[0] /= body_count;
+	body_center[1] /= body_count;
+	body_center[2] /= body_count;
+	pixel2world( body_center );
+
+
 	in.close();
 	return load_successful;
 	// also need to get BLLY_ONE from xyz center
@@ -212,9 +233,9 @@ void draw_depth_user( cv::Mat *image, float *depth ){
 		if( depth[p] < BACKGROUND_DEPTH ){
 			float gray = depth[p];
 			gray = (175*(gray-pmin)/(pmax-pmin) + 50 );
-			image->data[ p*3 + 0] = unsigned char( gray );
-			image->data[ p*3 + 1] = unsigned char( gray );
-			image->data[ p*3 + 2] = unsigned char( gray );
+			image->data[ p*3 + 0] = uchar( gray );
+			image->data[ p*3 + 1] = uchar( gray );
+			image->data[ p*3 + 2] = uchar( gray );
 		}
 		else{
 			image->data[ p*3 + 0] = 0xff;
@@ -243,8 +264,10 @@ void draw_joints( cv::Mat *image, float *joints ){
 		djoints[j*3+1] = pt[1];
 		djoints[j*3+2] = pt[2];
 	}
-	
+	cv::rectangle(*image, cv::Rect(djoints[ONE_HEAD*3+0]-2,djoints[ONE_HEAD*3+1]-2,4,4),cv::CV_RGB(255,0,0),2);
+	/*	
 	cv::line( *image, cv::Point( int( djoints[ONE_HEAD*3+0] ), int( djoints[ONE_HEAD*3+1] )), cv::Point( int( djoints[ONE_SDER*3+0]), int( djoints[ONE_SDER*3+1] )), middle, line_thickness, 8, 0);
+	
 	//cv::line( *image, cv::Point( int( djoints[ONE_TRSO*3+0] ), int( djoints[ONE_TRSO*3+1] )), cv::Point( int( djoints[ONE_SDER*3+0]), int( djoints[ONE_SDER*3+1] )), middle, line_thickness, 8, 0);
 	cv::line( *image, cv::Point( int( djoints[ONE_SDER*3+0] ), int( djoints[ONE_SDER*3+1] )), cv::Point( int( djoints[ONE_BLLY*3+0]), int( djoints[ONE_BLLY*3+1] )), middle, line_thickness, 8, 0);
 
@@ -261,13 +284,14 @@ void draw_joints( cv::Mat *image, float *joints ){
 	cv::line( *image, cv::Point( int( djoints[ONE_BLLY*3+0] ), int( djoints[ONE_BLLY*3+1] )), cv::Point( int( djoints[RHT_HIPS*3+0]), int( djoints[RHT_HIPS*3+1] )), right, line_thickness, 8, 0);
 	cv::line( *image, cv::Point( int( djoints[RHT_KNEE*3+0] ), int( djoints[RHT_KNEE*3+1] )), cv::Point( int( djoints[RHT_HIPS*3+0]), int( djoints[RHT_HIPS*3+1] )), right, line_thickness, 8, 0);
 	cv::line( *image, cv::Point( int( djoints[RHT_KNEE*3+0] ), int( djoints[RHT_KNEE*3+1] )), cv::Point( int( djoints[RHT_AKLE*3+0]), int( djoints[RHT_AKLE*3+1] )), right, line_thickness, 8, 0);
+	*/
 }
 void getPDTdepthpath( char *load_path, char *model, int fidx ){
 	char suffix[128];
 	load_path[0] = '\0';
 	strcat( load_path, PDT_FOLDER );
 	strcat( load_path, model );
-	sprintf_s( suffix, "/parsed/parsed_depth_%i.txt", fidx );
+	sprintf( suffix, "/parsed/parsed_depth_%i.txt", fidx );
 	strcat( load_path, suffix );
 }
 void getPDTjointpath( char *load_path, char *model ){
@@ -275,12 +299,12 @@ void getPDTjointpath( char *load_path, char *model ){
 	load_path[0] = '\0';
 	strcat( load_path, PDT_FOLDER );
 	strcat( load_path, model );
-	sprintf_s( suffix, "/joints.txt");
+	sprintf( suffix, "/joints.txt");
 	strcat( load_path, suffix );
 }
 void get_save_path( char *save_path, char *folder, char *prefix, int idx ){
 	char last_half[512];
-	sprintf_s( last_half, "_%i.bin", idx );
+	sprintf( last_half, "_%i.bin", idx );
 	save_path[0] = '\0';
 	strcat( save_path, folder );
 	strcat( save_path, prefix );
@@ -323,7 +347,7 @@ void testPDT( char models[20][5] ){
 			float p_depth[Q_HEIGHT*Q_WIDTH];
 			float p_user[ Q_HEIGHT*Q_WIDTH]; // 0 for background, 1 for foreground
 			float p_joints[16*3];
-
+			
 			stats[0] = int(m/4);
 			stats[1] = int(m%4);
 			stats[2] = fidx;
@@ -332,9 +356,13 @@ void testPDT( char models[20][5] ){
 			stats[5] = 10000; // just a number
 
 			if( load2joint( &joint_in, p_joints, ext_para ) ){
-				load2depth( p_depth, p_user, load_path, ext_para);
+				float body_center[3];
+				load2depth( p_depth, p_user, body_center, load_path, ext_para);
+				p_joints[ONE_BLLY*3 + 0] = body_center[0];
+				p_joints[ONE_BLLY*3 + 1] = body_center[1];
+				p_joints[ONE_BLLY*3 + 2] = body_center[2];
 				//printf( "(%s, %i, %i) ", models[m], m, fidx );
-				printf( "MODEL%i ACTION%i ACTIONFRAME%i TOTALFRAME%i GOOD%i CLOSE%i\n", stats[0], stats[1], stats[2], stats[3], stats[4], stats[5] );
+				printf( "MODEL%i ACTION%i ACTIONFRAME%i TOTALFRAME%i GOOD%i CLOSE%i\n", stats[0], stats[1], stats[2], stats[3], stats[4], stats[5]);
 				draw_depth_user( &image, p_depth );
 				draw_joints( &image, p_joints );
 				cv::imshow( "pdt", image );
@@ -377,7 +405,7 @@ void testPDT( char models[20][5] ){
 	cv::waitKey();
 }
 
-int _tmain(int argc, _TCHAR* argv[])
+int main()
 {
 	char models[20][5] = {	"F1D1", "F1D2", "F1D3", "F1D4",
 							"F2D1", "F2D2", "F2D3", "F2D4",

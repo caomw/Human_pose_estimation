@@ -1,23 +1,29 @@
 
-vector<string> get_all_files_names_within_folder(string folder)
-{
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
+
+vector<string> get_all_files_names_within_folder(string folder) {
 	vector<string> names;
-	char search_path[1000];
-	sprintf_s(search_path, 1000, "%s*.*", folder.c_str());
-	WIN32_FIND_DATA fd;
-	HANDLE hFind = ::FindFirstFile(search_path, &fd);
-	if (hFind != INVALID_HANDLE_VALUE) {
-		do {
-			// read all (real) files in current folder
-			// , delete '!' read other 2 default folder . and ..
-			if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-				names.push_back(fd.cFileName);
-			}
-		} while (::FindNextFile(hFind, &fd));
-		::FindClose(hFind);
+	DIR *dp;
+	struct dirent *dirp;
+	struct stat filestat;
+
+	if ((dp = opendir(folder.c_str())) == NULL) {
+		cout << "error in opening files" << endl;
+		return vector<string>();
 	}
+
+	while ((dirp = readdir(dp)) != NULL) {
+		if (stat(folder.c_str(), &filestat)) continue;
+		if (S_ISDIR(filestat.st_mode)) continue;
+		printf("%s\n", dirp->d_name);
+		names.push_back(string(dirp->d_name));
+	}
+	closedir(dp);
 	return names;
 }
+
 
 
 void get_user_depth(point *pp_depth, float *depth, float *user, int frame_id)
@@ -53,36 +59,21 @@ void get_user_depth(point *pp_depth, float *depth, float *user, int frame_id)
 	}
 
 }
-void load_data(point* pp_point, joint** pp_joint, int mode)
+void load_data(point* pp_point, joint **pp_joint, int mode)
 {
 	int file_idx = 0;
 	int frame_num = 0;
-	int joint_fid = 0;
-	int frame_id = 0;
-	int iter_max = 0;
-	
 	stringstream ss;
-	ifstream inf;
 
 	if (mode == TEST)
-	{
 		frame_num = TEST_FRAME_NUM;
-		iter_max = 1;
-	}
 	else if (mode == TRAINING)
-	{
 		frame_num = TRAIN_FRAME_NUM;
-		iter_max = 4;
-	}
 	else if (mode == POINT_MATCHING)
-	{
 		frame_num = POINT_MATCHING_FRAME_NUM;
-		iter_max = 4;
-	}
-	
+
 	for (int i = 0; i < frame_num * Q_HEIGHT * Q_WIDTH; i++)
 	{
-		
 		int frame_id = i / (Q_HEIGHT * Q_WIDTH);
 		pp_point[i].frame_id = frame_id;
 
@@ -91,106 +82,90 @@ void load_data(point* pp_point, joint** pp_joint, int mode)
 		pt[1] = (i - frame_id * (Q_HEIGHT * Q_WIDTH)) / Q_WIDTH;
 		pp_point[i].x_pixel = pt[0];
 		pp_point[i].y_pixel = pt[1];
-		pp_point[i].depth = BACKGROUND_DEPTH;
 	}
 
-
-	for (int tid = 0; tid < iter_max; tid++)
+	for (int frame_id = 0; frame_id < frame_num;)
 	{
-		if (tid == 0)
-			ss << TRAINING_DIR << TRAIN_MODEL_1 << TEST_DIFFICULTY;
-		else if (tid == 1)
-			ss << TRAINING_DIR << TRAIN_MODEL_2 << TEST_DIFFICULTY;
-		else if (tid == 2)
-			ss << TRAINING_DIR << TRAIN_MODEL_3 << TEST_DIFFICULTY;
-		else if (tid == 3)
-			ss << TRAINING_DIR << TRAIN_MODEL_4 << TEST_DIFFICULTY;
+		FILE *ifp;
+		int stats[6];
 
-		if (tid == 0 && mode == TEST)
-			ss << TRAINING_DIR << TEST_MODEL << TEST_DIFFICULTY;
-
-		string cur_dir = ss.str();
-		ss << "/parsed/";
-		string cur_depth_dir = ss.str();
+		ss << TRAINING_DIR << "pdt_ordered_stat_" << file_idx << ".bin";
+		ifp = fopen(ss.str().c_str(), "rb");
+		fread(&stats, sizeof(int), 6, ifp);
+		fclose(ifp);
 		ss.str("");
 		ss.clear();
-
-		vector<string> file_list = get_all_files_names_within_folder(cur_depth_dir);
-		vector<int> fid_list;
-
-#define RANDOM_SAMPLING_TRAINING 500
-		for (int iter = 0; iter < RANDOM_SAMPLING_TRAINING; iter++)
+		bool check_model = false;
+		if (mode == TRAINING || mode == POINT_MATCHING)
+		{
+			if (stats[0] != TEST_MODEL_1 && stats[0] != TEST_MODEL_2 && stats[0] != TEST_MODEL_3)
+				check_model = true;
+		}
+		else
+		{
+			if (stats[0] == TEST_MODEL_1 || stats[0] == TEST_MODEL_2 || stats[0] == TEST_MODEL_3)
+				check_model = true;
+		}
+        if (check_model)	// stat model, action, action frame, total frame, good or bad, order idx
 		{
 
-			int fid = rand() % file_list.size();
-			fid_list.push_back(fid);
+			float *depth = new float[Q_WIDTH*Q_HEIGHT];
+			float *user = new float[Q_WIDTH*Q_HEIGHT];
+			float joints[JOINT_NUMBER * COORDINATE_DIM];
+			float loaded_float[Q_WIDTH*Q_HEIGHT];
 
-			ss << cur_depth_dir << file_list[fid];
-			inf.open(ss.str());
+
+			ss << TRAINING_DIR << "pdt_ordered_depth_" << file_idx << ".bin";
+			ifp = fopen(ss.str().c_str(), "rb");
+			fread(&loaded_float, sizeof(float), Q_WIDTH*Q_HEIGHT, ifp);
+			for (int p = 0; p < Q_WIDTH*Q_HEIGHT; p++){ depth[p] = loaded_float[p]; }
+			fclose(ifp);
 			ss.str("");
 			ss.clear();
 
-			string line;
-			int x_pixel, y_pixel;
-			double x_world, y_world, depth;
-			while (getline(inf, line))
+			ss << TRAINING_DIR << "pdt_ordered_user_" << file_idx << ".bin";
+			ifp = fopen(ss.str().c_str(), "rb");
+			fread(&loaded_float, sizeof(float), Q_WIDTH*Q_HEIGHT, ifp);
+			for (int p = 0; p < Q_WIDTH*Q_HEIGHT; p++){ user[p] = loaded_float[p]; }
+			fclose(ifp);
+			ss.str("");
+			ss.clear();
+
+			get_user_depth(pp_point, depth, user, frame_id);
+
+
+			ss << TRAINING_DIR << "pdt_ordered_joint_" << file_idx << ".bin";
+			ifp = fopen(ss.str().c_str(), "rb");
+			fread(&joints, sizeof(float), JOINT_NUMBER * COORDINATE_DIM, ifp);
+			fclose(ifp);
+			ss.str("");
+			ss.clear();
+
+			for (int j = 0; j < JOINT_NUMBER; j++)
 			{
-				ss << line;
-				ss >> y_pixel >> x_pixel >> y_world >> x_world >> depth;
-
-				ss.str("");
-				ss.clear();
-
-				pp_point[frame_id * Q_HEIGHT * Q_WIDTH + y_pixel * Q_WIDTH + x_pixel].x_world = x_world;
-				pp_point[frame_id * Q_HEIGHT * Q_WIDTH + y_pixel * Q_WIDTH + x_pixel].y_world = y_world;
-				pp_point[frame_id * Q_HEIGHT * Q_WIDTH + y_pixel * Q_WIDTH + x_pixel].depth = depth;
-			}
-
-			cout << "frame_id: " << frame_id << endl;
-			frame_id++;
-			inf.close();
-		}
-		file_list.clear();
-
-		ss << cur_dir << "/joints.txt";
-		inf.open(ss.str());
-		ss.str("");
-		ss.clear();
-		
-		string line;
-		vector<string> joint_raw_data;
-
-		while (getline(inf, line))
-			joint_raw_data.push_back(line);
-		
-		inf.close();
-
-		for (int iter = 0; iter < RANDOM_SAMPLING_TRAINING; iter++)
-		{
-			ss << joint_raw_data[fid_list[iter]];
-
-			int effective_jid = 0;
-			for (int jid = 0; jid < 20; jid++)
-			{
-				double x_world, y_world, depth, ori_1, ori_2, ori_3, ori_4;
-				ss >> x_world >> y_world >> depth >> ori_1 >> ori_2 >> ori_3 >> ori_4;
+				float pt[3];
+				pt[0] = joints[j * COORDINATE_DIM + 0];
+				pt[1] = joints[j * COORDINATE_DIM + 1];
+				pt[2] = joints[j * COORDINATE_DIM + 2];
+				pp_joint[frame_id][j].x_world = pt[0];
+				pp_joint[frame_id][j].y_world = pt[1];
+				pp_joint[frame_id][j].depth = pt[2];
+                
+                world2pixel(pt);
+                pp_joint[frame_id][j].x_pixel = pt[0];
+				pp_joint[frame_id][j].y_pixel = pt[1];
+                
 				
-				if (jid == 1 || jid == 2 || jid == 3 || jid == 4 || jid == 5 || jid == 6 || jid == 8 || jid == 9 || jid == 10 || jid == 12 || jid == 13 || jid == 14 || jid == 16 || jid == 17 || jid == 18)
-				{
-					pp_joint[joint_fid][effective_jid].x_world = x_world;
-					pp_joint[joint_fid][effective_jid].y_world = y_world;
-					pp_joint[joint_fid][effective_jid].depth = depth;
-
-					effective_jid++;
-				}
 			}
-			ss.str("");
-			ss.clear();
-			joint_fid++;
-		}
 
+
+			delete[] depth;
+			delete[] user;
+
+			frame_id++;
+		}
+		file_idx++;
 	}
-	
 }
 void draw_depth_user(Mat *image, float *depth)
 {
@@ -218,9 +193,9 @@ void draw_depth_user(Mat *image, float *depth)
 			if (depth[p] < BACKGROUND_DEPTH){
 				float gray = depth[p];
 				gray = (175 * (gray - pmin) / (pmax - pmin) + 50);
-				image->data[p * 3 + 0] = unsigned char(gray);
-				image->data[p * 3 + 1] = unsigned char(gray);
-				image->data[p * 3 + 2] = unsigned char(gray);
+				image->data[p * 3 + 0] = (unsigned char)(gray);
+				image->data[p * 3 + 1] = (unsigned char)(gray);
+				image->data[p * 3 + 2] = (unsigned char)(gray);
 			}
 			else{
 				image->data[p * 3 + 0] = 0xff;
@@ -235,15 +210,20 @@ inline float rand_float(float min, float max)
 {
 	return (float(rand()) / float(RAND_MAX))*(max - min) + min;
 }
+inline void world2pixel( float pt[3] ){
+	pt[0] = 160 + pt[0]*258.2f/pt[2];
+	pt[1] = 120 + (pt[1]*258.2/pt[2]);
+
+	if( pt[0] < 0 ){ pt[0] = 0; }
+	if( pt[1] < 0 ){ pt[1] = 0; }
+	if( pt[0] >= 1024  ){ pt[0] = 1024-1; }
+	if( pt[1] >= 1024 ){  pt[1] = 1024-1; }
+	//if( pt[0] >= Q_WIDTH  ){ pt[0] = Q_WIDTH-1; }
+	//if( pt[1] >= Q_HEIGHT ){ pt[1] = Q_HEIGHT-1; }
+}
 inline void pixel2world(float pt[3])
 {
 	pt[0] = (pt[0] - 160.0f)*pt[2] * 0.003873f;
 	pt[1] = (pt[1] - 120.0f)*pt[2] * 0.003873f;
-}
-inline void world2pixel(float pt[3])
-{
-	
-	pt[0] = 160 + pt[0] * 258.2f / pt[2];
-	pt[1] = 120 + (pt[1] * 258.2 / pt[2]);
 }
 

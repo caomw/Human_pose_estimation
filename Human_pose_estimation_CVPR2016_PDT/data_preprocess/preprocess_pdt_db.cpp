@@ -1,6 +1,9 @@
 // train_ONE_BLLY2.cpp : Defines the entry point for the console application.
 //
-
+#include <opencv2/core/core.hpp>
+#include <opencv2/opencv.hpp> 
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <iostream>
@@ -9,12 +12,15 @@
 #include <stdlib.h>
 
 
-#define PDT_FOLDER		"/media/sda10/Study/Data/Human_pose_estimation/PDT/"
-#define SAVE_FOLDER		"/media/sda10/Study/Data/Human_pose_estimation/PDT/time_sequence/"
+#define PDT_FOLDER		"/media/sda1/Study/Data/Human_pose_estimation/PDT/"
+#define SAVE_FOLDER		"/media/sda1/Study/Data/Human_pose_estimation/PDT/PDT2EVAL/time_sequence/"
 
 #define Q_WIDTH					320
 #define Q_HEIGHT				240
 #define BACKGROUND_DEPTH		100
+
+using namespace std;
+using namespace cv;
 enum{
 		ONE_HEAD		=	0,
 		ONE_SDER		=	1,
@@ -264,8 +270,10 @@ void draw_joints( cv::Mat *image, float *joints ){
 		djoints[j*3+1] = pt[1];
 		djoints[j*3+2] = pt[2];
 	}
-	/*
+	rectangle(*image, Rect(djoints[ONE_HEAD*3+0]-2,djoints[ONE_HEAD*3+1]-2,4,4),CV_RGB(255,0,0),2);
+	/*	
 	cv::line( *image, cv::Point( int( djoints[ONE_HEAD*3+0] ), int( djoints[ONE_HEAD*3+1] )), cv::Point( int( djoints[ONE_SDER*3+0]), int( djoints[ONE_SDER*3+1] )), middle, line_thickness, 8, 0);
+	
 	//cv::line( *image, cv::Point( int( djoints[ONE_TRSO*3+0] ), int( djoints[ONE_TRSO*3+1] )), cv::Point( int( djoints[ONE_SDER*3+0]), int( djoints[ONE_SDER*3+1] )), middle, line_thickness, 8, 0);
 	cv::line( *image, cv::Point( int( djoints[ONE_SDER*3+0] ), int( djoints[ONE_SDER*3+1] )), cv::Point( int( djoints[ONE_BLLY*3+0]), int( djoints[ONE_BLLY*3+1] )), middle, line_thickness, 8, 0);
 
@@ -282,7 +290,7 @@ void draw_joints( cv::Mat *image, float *joints ){
 	cv::line( *image, cv::Point( int( djoints[ONE_BLLY*3+0] ), int( djoints[ONE_BLLY*3+1] )), cv::Point( int( djoints[RHT_HIPS*3+0]), int( djoints[RHT_HIPS*3+1] )), right, line_thickness, 8, 0);
 	cv::line( *image, cv::Point( int( djoints[RHT_KNEE*3+0] ), int( djoints[RHT_KNEE*3+1] )), cv::Point( int( djoints[RHT_HIPS*3+0]), int( djoints[RHT_HIPS*3+1] )), right, line_thickness, 8, 0);
 	cv::line( *image, cv::Point( int( djoints[RHT_KNEE*3+0] ), int( djoints[RHT_KNEE*3+1] )), cv::Point( int( djoints[RHT_AKLE*3+0]), int( djoints[RHT_AKLE*3+1] )), right, line_thickness, 8, 0);
-*/
+	*/
 }
 void getPDTdepthpath( char *load_path, char *model, int fidx ){
 	char suffix[128];
@@ -345,7 +353,7 @@ void testPDT( char models[20][5] ){
 			float p_depth[Q_HEIGHT*Q_WIDTH];
 			float p_user[ Q_HEIGHT*Q_WIDTH]; // 0 for background, 1 for foreground
 			float p_joints[16*3];
-
+			
 			stats[0] = int(m/4);
 			stats[1] = int(m%4);
 			stats[2] = fidx;
@@ -360,7 +368,7 @@ void testPDT( char models[20][5] ){
 				p_joints[ONE_BLLY*3 + 1] = body_center[1];
 				p_joints[ONE_BLLY*3 + 2] = body_center[2];
 				//printf( "(%s, %i, %i) ", models[m], m, fidx );
-				printf( "MODEL%i ACTION%i ACTIONFRAME%i TOTALFRAME%i GOOD%i CLOSE%i\n", stats[0], stats[1], stats[2], stats[3], stats[4], stats[5] );
+				printf( "MODEL%i ACTION%i ACTIONFRAME%i TOTALFRAME%i GOOD%i CLOSE%i\n", stats[0], stats[1], stats[2], stats[3], stats[4], stats[5]);
 				draw_depth_user( &image, p_depth );
 				draw_joints( &image, p_joints );
 				cv::imshow( "pdt", image );

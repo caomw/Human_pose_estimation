@@ -1,5 +1,4 @@
 
-#if !WINDOW
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <dirent.h>
@@ -25,30 +24,6 @@ vector<string> get_all_files_names_within_folder(string folder) {
 	return names;
 }
 
-
-
-#else
-vector<string> get_all_files_names_within_folder(string folder)
-{
-	vector<string> names;
-	char search_path[1000];
-	sprintf_s(search_path, 1000, "%s*.*", folder.c_str());
-	WIN32_FIND_DATA fd;
-	HANDLE hFind = ::FindFirstFile(search_path, &fd);
-	if (hFind != INVALID_HANDLE_VALUE) {
-		do {
-			// read all (real) files in current folder
-			// , delete '!' read other 2 default folder . and ..
-			if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-				names.push_back(fd.cFileName);
-			}
-		} while (::FindNextFile(hFind, &fd));
-		::FindClose(hFind);
-	}
-	return names;
-}
-
-#endif
 
 
 void get_user_depth(point *pp_depth, float *depth, float *user, int frame_id)
